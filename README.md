@@ -15,7 +15,7 @@ Stages and compiles reference genome data packages for delivery to collaborators
 
 ## Config file
 
-Copy and fill in `refgenomes_data_package.conf` before running any step.
+Edit `refgenomes_data_package.conf` before running — set `PROJECT_ID` (or `OG_ID` + `PACKAGE_NAME`) and `STAGING_BASE_DIR` for your run. All bucket paths are already set.
 
 ```bash
 # ── Scope: set ONE of PROJECT_ID or OG_ID ──────────────────────────────────
