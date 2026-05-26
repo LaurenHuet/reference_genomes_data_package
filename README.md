@@ -1,4 +1,4 @@
-# get_data_package
+# Reference Genome data package compile
 
 Stages and compiles reference genome data packages for delivery to collaborators. Pulls raw reads, assemblies, and mitogenomes from Acacia object storage and the OceanOmics PostgreSQL database, then organises them into a clean per-species directory structure.
 
