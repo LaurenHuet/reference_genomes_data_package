@@ -1,4 +1,4 @@
-# Reference Genome data package compile
+# get_data_package
 
 Stages and compiles reference genome data packages for delivery to collaborators. Pulls raw reads, assemblies, and mitogenomes from Acacia object storage and the OceanOmics PostgreSQL database, then organises them into a clean per-species directory structure.
 
@@ -27,16 +27,20 @@ PROJECT_ID='OGP047'                        # all OGs in this project
 STAGING_BASE_DIR='/scratch/pawsey0964/{user}/data_packages/OGP047'
 
 # ── Rclone remotes ──────────────────────────────────────────────────────────
-ASSEMBLY_BUCKET='pawsey0964:oceanomics-assemblies'
-HIFI_BUCKET='pawsey0964:oceanomics-hifi'
-HIC_BUCKET='pawsey0964:oceanomics-hic'
-DRAFT_BUCKET='pawsey0964:oceanomics-draft-genomes'
+ASSEMBLY_BUCKET='pawsey0964:oceanomics-refassemblies'
+HIFI_BUCKET='pawsey0964:oceanomics-filtered-reads'
+HIC_BUCKET='s3:oceanomics/OceanGenomes/illumina-hic'
+DRAFT_BUCKET='pawsey0964:oceanomics-draftgenomes'
 
 # ── Database ────────────────────────────────────────────────────────────────
 POSTGRES_CFG='~/postgresql_details/oceanomics.cfg'
 
 # ── Mitogenome pipeline ─────────────────────────────────────────────────────
 MITO_PIPELINE_DIR='/scratch/pawsey0964/{user}/Data_Package_Pipeline_Mitogenomes'
+
+# ── Backup (step 07) ────────────────────────────────────────────────────────
+DATAPACKS_BUCKET='pawsey0964:oceanomics-datapacks'
+DATAPACKS_ZIPPED_BUCKET='pawsey0964:oceanomics-datapacks-zipped'
 
 # ── Optional ────────────────────────────────────────────────────────────────
 # RCLONE_FLAGS='--dry-run --progress'      # add --dry-run to test without copying
@@ -49,12 +53,30 @@ MITO_PIPELINE_DIR='/scratch/pawsey0964/{user}/Data_Package_Pipeline_Mitogenomes'
 
 ## Running the pipeline
 
-### Step 0 — Generate transfer map CSVs from the database
+### Quickstart — run everything at once
 
-Queries PostgreSQL and writes three CSVs to `STAGING_BASE_DIR`:
-- `refgenomes_assembly_stats_{LABEL}_{DATE}.csv` — assembly QC stats for stage-3 OGs
-- `hic_transfer_map_{LABEL}_{DATE}.csv` — OG → Hi-C tube ID mapping
-- `draft_transfer_map_{LABEL}_{DATE}.csv` — draft workflow OGs
+```bash
+bash run_all.sh refgenomes_data_package.conf
+```
+
+Flags:
+- `--skip-db` — skip step 0 (transfer maps already exist)
+- `--skip-mito` — skip step 04 (mitogenome pipeline)
+- `--dry-run` — passes `--dry-run` to all rclone calls, no data is copied
+
+Steps 01–05 run in parallel with timestamped logs written to `logs/`. Steps 06, audit, and 07 run sequentially after. The script exits early if staging or audit fails.
+
+### Step by step
+
+### Step 0 — Generate transfer maps and assembly stats from the database
+
+**This must run first.** `pull_genome_statistics_by_project.py` queries PostgreSQL and writes three CSVs to `STAGING_BASE_DIR` that all downstream steps depend on:
+
+| File | Used by | Purpose |
+|---|---|---|
+| `hic_transfer_map_{LABEL}_{DATE}.csv` | steps 01, 02, 03, 04 | OG ID → Hi-C tube ID mapping |
+| `draft_transfer_map_{LABEL}_{DATE}.csv` | steps 03, 04, 05, 06 | Draft workflow OG IDs and species names |
+| `refgenomes_assembly_stats_{LABEL}_{DATE}.csv` | step 06 | Stage-3 assembly QC stats (determines reference OG classification) |
 
 ```bash
 singularity run $SING/psycopg2:0.1.sif python \
@@ -117,6 +139,22 @@ Checks the compiled package for missing files and reports PASS / WARN / FAIL per
 bash audit_data_package.sh refgenomes_data_package.conf
 ```
 
+### Step 07 — Package and back up
+
+Generates a recursive file listing of the compiled package, zips the directory, and uploads the zip to Acacia. Run after the audit passes.
+
+```bash
+bash 07_package_and_backup.sh refgenomes_data_package.conf
+```
+
+Four actions in sequence:
+1. Copies compiled package to `DATAPACKS_BUCKET/{DATA_ID}/` (`pawsey0964:oceanomics-datapacks`)
+2. Lists `DATAPACKS_BUCKET/{DATA_ID}/` and saves as `{DATA_ID}_returned_{YYMMDD}.txt` (e.g. `OGP047_returned_260526.txt`)
+3. Zips the local staging directory to `{DATA_ID}_returned_{YYMMDD}.zip`
+4. Uploads the zip to `DATAPACKS_ZIPPED_BUCKET` (`pawsey0964:oceanomics-datapacks-zipped`)
+
+> **Note:** For large packages (>50 GB) submit this as a SLURM job rather than running on the login node.
+
 ---
 
 ## Output structure
@@ -135,6 +173,7 @@ Each OG is classified as one of three types based on what is available:
 ├── hic_transfer_map_{LABEL}_{DATE}.csv
 ├── draft_transfer_map_{LABEL}_{DATE}.csv
 ├── mitogenome_metadata_{LABEL}.csv
+├── {DATA_ID}_returned_{YYMMDD}.txt          ← file listing (step 07)
 │
 ├── {Species}_reference/
 │   ├── {OG}_v{n}.curated.hap1.chr_level.fa
@@ -183,8 +222,6 @@ Each OG is classified as one of three types based on what is available:
 | `mitogenome/GENES/*.fa` | FASTA | Individual mitochondrial gene sequences (CDS) |
 | `mitogenome/GFF/*.gff` | GFF3 | Mitochondrial genome annotation |
 | `refgenomes_assembly_stats_*.csv` | CSV | Assembly QC metrics: N50, BUSCO, Merqury QV, chromosome assignment |
-| `hic_transfer_map_*.csv` | CSV | OG ID → Hi-C library tube ID mapping |
-| `draft_transfer_map_*.csv` | CSV | Draft workflow OG IDs and species names |
 | `mitogenome_metadata_*.csv` | CSV | Mitogenome accession and metadata for all project OGs |
 
 ---
